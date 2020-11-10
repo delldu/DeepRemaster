@@ -38,9 +38,13 @@ if __name__ == "__main__":
     device = torch.device(os.environ["DEVICE"])
 
     # get model
-    model = get_model()
-    model_load(model, args.checkpoint)
-    model.to(device)
+    model_r = get_model("modelR")
+    model_load(model_r, args.checkpoint)
+    model_r.to(device)
+
+    model_c = get_model("modelC")
+    model_load(model_c, args.checkpoint)
+    model_c.to(device)
 
     # construct optimizer and learning rate scheduler,
     # xxxx--modify here
@@ -48,19 +52,15 @@ if __name__ == "__main__":
     optimizer = optim.SGD(params, lr=args.lr, momentum=0.9, weight_decay=0.0005)
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
-    if os.environ["ENABLE_APEX"] == "YES":
-        from apex import amp
-        model, optimizer = amp.initialize(model, optimizer, opt_level="O1")
-
     # get data loader
     train_dl, valid_dl = get_data(trainning=True, bs=args.bs)
 
     for epoch in range(args.epochs):
         print("Epoch {}/{}, learning rate: {} ...".format(epoch + 1, args.epochs, lr_scheduler.get_last_lr()))
 
-        train_epoch(train_dl, model, optimizer, device, tag='train')
+        train_epoch(train_dl, model_r, optimizer, device, tag='train')
 
-        valid_epoch(valid_dl, model, device, tag='valid')
+        valid_epoch(valid_dl, model_r, device, tag='valid')
 
         lr_scheduler.step()
 

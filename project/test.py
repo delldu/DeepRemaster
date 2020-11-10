@@ -21,7 +21,7 @@ if __name__ == "__main__":
     model_setenv()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint', type=str, default="output/VideoColor.pth", help="checkpoint file")
+    parser.add_argument('--checkpoint', type=str, default="models/VideoColor.pth", help="checkpoint file")
     parser.add_argument('--bs', type=int, default=2, help="batch size")
     args = parser.parse_args()
 
@@ -29,14 +29,19 @@ if __name__ == "__main__":
     device = torch.device(os.environ["DEVICE"])
 
     # get model
-    model = get_model()
-    model_load(model, args.checkpoint)
-    model.to(device)
+    model_r = get_model("modelR")
+    model_load(model_r, args.checkpoint)
+    model_r.to(device)
+
+    model_c = get_model("modelR")
+    model_load(model_c, args.checkpoint)
+    model_c.to(device)
 
     if os.environ["ENABLE_APEX"] == "YES":
         from apex import amp
-        model = amp.initialize(model, opt_level="O1")
+        model_r = amp.initialize(model_r, opt_level="O1")
+        model_c = amp.initialize(model_c, opt_level="O1")
 
     print("Start testing ...")
     test_dl = get_data(trainning=False, bs=args.bs)
-    valid_epoch(test_dl, model, device, tag='test')
+    valid_epoch(test_dl, model_r, device, tag='test')

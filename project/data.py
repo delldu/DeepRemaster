@@ -11,16 +11,151 @@
 #
 
 import os
+import pdb
+
 import torch
-from PIL import Image
 import torch.utils.data as data
 import torchvision.transforms as T
 import torchvision.utils as utils
+from PIL import Image
 
-# xxxx--modify here
 train_dataset_rootdir = "dataset/train/"
 test_dataset_rootdir = "dataset/test/"
-VIDEO_SEQUENCE_LENGTH = 5
+VIDEO_SEQUENCE_LENGTH = 1
+
+
+def rgb2xyz(rgb):  # rgb from [0,1]
+    # [0.412453, 0.357580, 0.180423],
+    # [0.212671, 0.715160, 0.072169],
+    # [0.019334, 0.119193, 0.950227]
+
+    mask = (rgb > .04045).type(torch.FloatTensor)
+    if(rgb.is_cuda):
+        mask = mask.cuda()
+
+    rgb = (((rgb+.055)/1.055)**2.4)*mask + rgb/12.92*(1-mask)
+
+    x = .412453*rgb[:, 0, :, :]+.357580*rgb[:, 1, :, :]+.180423*rgb[:, 2, :, :]
+    y = .212671*rgb[:, 0, :, :]+.715160*rgb[:, 1, :, :]+.072169*rgb[:, 2, :, :]
+    z = .019334*rgb[:, 0, :, :]+.119193*rgb[:, 1, :, :]+.950227*rgb[:, 2, :, :]
+
+    out = torch.cat(
+        (x[:, None, :, :], y[:, None, :, :], z[:, None, :, :]), dim=1)
+
+    return out
+
+
+def xyz2rgb(xyz):
+    # [ 3.24048134, -1.53715152, -0.49853633],
+    # [-0.96925495,  1.87599   ,  0.04155593],
+    # [ 0.05564664, -0.20404134,  1.05731107]
+
+    r = 3.24048134*xyz[:, 0, :, :]-1.53715152 * \
+        xyz[:, 1, :, :]-0.49853633*xyz[:, 2, :, :]
+    g = -0.96925495*xyz[:, 0, :, :]+1.87599 * \
+        xyz[:, 1, :, :]+.04155593*xyz[:, 2, :, :]
+    b = .05564664*xyz[:, 0, :, :]-.20404134 * \
+        xyz[:, 1, :, :]+1.05731107*xyz[:, 2, :, :]
+
+    rgb = torch.cat(
+        (r[:, None, :, :], g[:, None, :, :], b[:, None, :, :]), dim=1)
+    # Some times reaches a small negative number, which causes NaNs
+    rgb = torch.max(rgb, torch.zeros_like(rgb))
+
+    mask = (rgb > .0031308).type(torch.FloatTensor)
+    if(rgb.is_cuda):
+        mask = mask.cuda()
+
+    rgb = (1.055*(rgb**(1./2.4)) - 0.055)*mask + 12.92*rgb*(1-mask)
+
+    return rgb
+
+
+def xyz2lab(xyz):
+    # 0.95047, 1., 1.08883 # white
+    sc = torch.Tensor((0.95047, 1., 1.08883))[None, :, None, None]
+    # sc.size() torch.Size([1, 3, 1, 1])
+
+    if(xyz.is_cuda):
+        sc = sc.cuda()
+
+    xyz_scale = xyz/sc
+
+    mask = (xyz_scale > .008856).type(torch.FloatTensor)
+    if(xyz_scale.is_cuda):
+        mask = mask.cuda()
+
+    xyz_int = xyz_scale**(1/3.)*mask + (7.787*xyz_scale + 16./116.)*(1-mask)
+
+    L = 116.*xyz_int[:, 1, :, :]-16.
+    a = 500.*(xyz_int[:, 0, :, :]-xyz_int[:, 1, :, :])
+    b = 200.*(xyz_int[:, 1, :, :]-xyz_int[:, 2, :, :])
+    out = torch.cat(
+        (L[:, None, :, :], a[:, None, :, :], b[:, None, :, :]), dim=1)
+
+    return out
+
+
+def lab2xyz(lab):
+    y_int = (lab[:, 0, :, :]+16.)/116.
+    x_int = (lab[:, 1, :, :]/500.) + y_int
+    z_int = y_int - (lab[:, 2, :, :]/200.)
+    if(z_int.is_cuda):
+        z_int = torch.max(torch.Tensor((0,)).cuda(), z_int)
+    else:
+        z_int = torch.max(torch.Tensor((0,)), z_int)
+
+    out = torch.cat(
+        (x_int[:, None, :, :], y_int[:, None, :, :], z_int[:, None, :, :]), dim=1)
+    mask = (out > .2068966).type(torch.FloatTensor)
+    if(out.is_cuda):
+        mask = mask.cuda()
+
+    out = (out**3.)*mask + (out - 16./116.)/7.787*(1-mask)
+
+    sc = torch.Tensor((0.95047, 1., 1.08883))[None, :, None, None]
+    sc = sc.to(out.device)
+
+    out = out*sc
+
+    return out
+
+
+def rgb2lab(rgb):
+    lab = xyz2lab(rgb2xyz(rgb))
+    # rgb: [0, 1.0] == >l in [0, 100], ab in [-110, 110]
+
+    # l_rs = (lab[:, [0], :, :] - 50.0)/100.0
+    l_rs = lab[:, [0], :, :]/100.0
+    ab_rs = (lab[:, 1:, :, :] + 110.0)/220.0
+    out = torch.cat((l_rs, ab_rs), dim=1)
+    # out ==> [0, 1.0]
+    # if out.max() > 1.01 or out.min() < -0.01:
+    #     print("input !!! rgb2lab ===========> !!!")
+    #     print("out.max()", out.max(), "l.max(): ", l_rs.max(), "ab.max(): ", ab_rs.max())
+    #     print("out.l.max()= ", out[:, [0], :, :].max())
+    #     print("out.ab.max()= ", out[:, 1:, :, :].max())
+    #     pdb.set_trace()
+
+    return out
+
+
+def lab2rgb(lab_rs):
+    l = lab_rs[:, [0], :, :] * 100.0
+    ab = (lab_rs[:, 1:, :, :]) * 220.0 - 110.0
+
+    lab = torch.cat((l, ab), dim=1)
+
+    # lab range: l->[0, 100], ab in [-110, 110] ==> rgb: [0, 1.0]
+
+    out = xyz2rgb(lab2xyz(lab))
+    # if out.max() > 1.01 or out.min() < -0.01:
+    #     print("===========>")
+    #     print("out.max()", out.max(), "l.max(): ", l.max(), "ab.max(): ", ab.max())
+    #     print("out.l.max()= ", out[:, [0], :, :].max())
+    #     print("out.ab.max()= ", out[:, 1:, :, :].max())
+
+    return out
 
 
 def get_transform(train=True):
@@ -31,6 +166,22 @@ def get_transform(train=True):
 
     ts.append(T.ToTensor())
     return T.Compose(ts)
+
+def get_reference(root):
+    """Get all frames of video."""
+
+    filelist = list(sorted(os.listdir(root)))
+    sequence = []
+    transforms = get_transform(train = False)
+    for filename in filelist:
+        img = Image.open(os.path.join(root, filename)).convert("RGB")
+        img = transforms(img)
+        C, H, W = img.size()
+        img = img.view(1, C, H, W)
+        sequence.append(img)
+
+    # General, return Tensor: T x C x H x W], T = self.seqlen
+    return torch.cat(sequence, dim=0)
 
 class Video(data.Dataset):
     """Define Video Frames Class."""
@@ -66,19 +217,25 @@ class Video(data.Dataset):
             img = Image.open(filename).convert("RGB")
             if self.transforms is not None:
                 img = self.transforms(img)
+                C, H, W = img.size()
+                img = img.view(1, C, H, W)
             sequence.append(img)
+
         if self.transforms is not None:
+            # General, return Tensor: T x C x H x W], T = self.seqlen
             return torch.cat(sequence, dim=0)
+
         return sequence
 
     def __len__(self):
         """Return total numbers of images."""
         return len(self.images)
 
+
 class VideoColorDataset(data.Dataset):
     """Define dataset."""
 
-    def __init__(self, root, transforms=get_transform()):
+    def __init__(self, root, seqlen=VIDEO_SEQUENCE_LENGTH, transforms=get_transform()):
         """Init dataset."""
         super(VideoColorDataset, self).__init__()
 
@@ -120,13 +277,16 @@ class VideoColorDataset(data.Dataset):
         fmt_str += '    Number of samples: {}\n'.format(self.__len__())
         fmt_str += '    Root Location: {}\n'.format(self.root)
         tmp = '    Transforms: '
-        fmt_str += '{0}{1}\n'.format(tmp, self.transforms.__repr__().replace('\n', '\n' + ' ' * len(tmp)))
+        fmt_str += '{0}{1}\n'.format(
+            tmp, self.transforms.__repr__().replace('\n', '\n' + ' ' * len(tmp)))
         return fmt_str
+
 
 def train_data(bs):
     """Get data loader for trainning & validating, bs means batch_size."""
 
-    train_ds = VideoColorDataset(train_dataset_rootdir, VIDEO_SEQUENCE_LENGTH, get_transform(train=True))
+    train_ds = VideoColorDataset(
+        train_dataset_rootdir, VIDEO_SEQUENCE_LENGTH, get_transform(train=True))
     print(train_ds)
 
     # Split train_ds in train and valid set
@@ -147,11 +307,14 @@ def train_data(bs):
 
     return train_dl, valid_dl
 
+
 def test_data(bs):
     """Get data loader for test, bs means batch_size."""
 
-    test_ds = VideoColorDataset(test_dataset_rootdir,VIDEO_SEQUENCE_LENGTH,  get_transform(train=False))
-    test_dl = data.DataLoader(test_ds, batch_size=bs, shuffle=False, num_workers=4)
+    test_ds = VideoColorDataset(
+        test_dataset_rootdir, VIDEO_SEQUENCE_LENGTH,  get_transform(train=False))
+    test_dl = data.DataLoader(test_ds, batch_size=bs,
+                              shuffle=False, num_workers=4)
 
     return test_dl
 
@@ -161,13 +324,18 @@ def get_data(trainning=True, bs=4):
 
     return train_data(bs) if trainning else test_data(bs)
 
+
 def VideoColorDatasetTest():
     """Test dataset ..."""
 
     ds = VideoColorDataset(train_dataset_rootdir)
     print(ds)
-    # vs = Video()
-    # vs.reset("dataset/predict/input")
+    vs = Video()
+    vs.reset("dataset/predict/input")
+
+    refimgs = get_reference("dataset/predict/reference")
+    pdb.set_trace()
+
 
 if __name__ == '__main__':
     VideoColorDatasetTest()
