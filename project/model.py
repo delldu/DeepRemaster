@@ -17,6 +17,14 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
+from data import VIDEO_SEQUENCE_LENGTH
+
+def PSNR(img1, img2):
+    """PSNR."""
+    difference = (1.*img1-img2)**2
+    mse = torch.sqrt(torch.mean(difference)) + 0.000001
+    return 20*torch.log10(1./mse)
+
 class VideoColorModel(nn.Module):
     """VideoColor Model."""
 
@@ -93,7 +101,7 @@ def model_export():
 
 def get_model():
     """Create model."""
-    model = VideoColorModel()
+    model = VideoColorModel(num_input_frames=5)
     return model
 
 

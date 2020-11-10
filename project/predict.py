@@ -37,13 +37,15 @@ if __name__ == "__main__":
     model.eval()
 
     if os.environ["ENABLE_APEX"] == "YES":
-        model, = amp.initialize(model, opt_level="O1")
+        from apex import amp
+        model = amp.initialize(model, opt_level="O1")
 
     totensor = transforms.ToTensor()
     toimage = transforms.ToPILImage()
 
-    image_filenames = glob.glob(args.input)
-    progress_bar = tqdm(total = len(image_filenames))
+    video = Video()
+    video.reset(args.input)
+    progress_bar = tqdm(total=len(video))
 
     for index, filename in enumerate(image_filenames):
         progress_bar.update(1)
