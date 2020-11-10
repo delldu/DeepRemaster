@@ -35,7 +35,7 @@ class TempConv(nn.Module):
         self.bn = nn.BatchNorm3d(out_planes)
 
     def forward(self, x):
-        return F.elu(self.bn(self.conv3d(x)), inplace=False)
+        return F.elu(self.bn(self.conv3d(x)), inplace=True)
 
 
 class Upsample(nn.Module):
@@ -47,7 +47,7 @@ class Upsample(nn.Module):
         self.bn = nn.BatchNorm3d(out_planes)
 
     def forward(self, x):
-        return F.elu(self.bn(self.conv3d(F.interpolate(x, scale_factor=self.scale_factor, mode='trilinear', align_corners=False))), inplace=False)
+        return F.elu(self.bn(self.conv3d(F.interpolate(x, scale_factor=self.scale_factor, mode='trilinear', align_corners=False))), inplace=True)
 
 
 class UpsampleConcat(nn.Module):
@@ -60,6 +60,10 @@ class UpsampleConcat(nn.Module):
         x1 = F.interpolate(x1, scale_factor=(1, 2, 2),
                            mode='trilinear', align_corners=False)
         x = torch.cat([x1, x2], dim=1)
+
+        del x1, x2
+        torch.cuda.empty_cache()
+
         return self.conv3d(x)
 
 
@@ -112,6 +116,10 @@ class SourceReferenceAttention(nn.Module):
         out = torch.bmm(proj_value, attention.permute(0, 2, 1))
         out = out.view(s_batchsize, sC, sT, sH, sW)
         out = self.gamma*out + source
+
+        del proj_query, proj_key, energy, proj_value
+        torch.cuda.empty_cache()
+
         return out, attention
 
 
@@ -140,7 +148,7 @@ class VideoRestoreModel(nn.Module):
         )
 
     def forward(self, x):
-        return (x + torch.tanh(self.layers(x.clone()-0.4462414))).clamp(0, 1)
+        return (x + torch.tanh(self.layers(x.clone()-0.4462414))).clamp_(0, 1)
 
 
 class VideoColorModel(nn.Module):
@@ -221,6 +229,9 @@ class VideoColorModel(nn.Module):
         x2 = self.flat(x1)
         out = self.down2(x1)
 
+        del x1, _
+        torch.cuda.empty_cache()
+
         if x_refs is not None:
             reffeat2 = self.reffeatnet2(reffeat)
             out, _ = self.stattn2(out, reffeat2)
@@ -233,6 +244,9 @@ class VideoColorModel(nn.Module):
         out = self.up2(out)
         out = self.up3(out)
         out = self.up4(out)
+
+        del x2, reffeat, reffeat2
+        torch.cuda.empty_cache()
 
         return torch.sigmoid(out)
 

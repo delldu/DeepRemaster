@@ -21,7 +21,9 @@ from PIL import Image
 
 train_dataset_rootdir = "dataset/train/"
 test_dataset_rootdir = "dataset/test/"
-VIDEO_SEQUENCE_LENGTH = 1
+
+# !!! For VideoColor, this const must be > 1 !!!
+VIDEO_SEQUENCE_LENGTH = 5
 
 
 def rgb2xyz(rgb):  # rgb from [0,1]
@@ -123,40 +125,36 @@ def lab2xyz(lab):
 
 def rgb2lab(rgb):
     lab = xyz2lab(rgb2xyz(rgb))
-    # rgb: [0, 1.0] == >l in [0, 100], ab in [-110, 110]
+    # xyz2lab(rgb2xyz(rgb)) parameters:
+    # input: rgb in [0, 1.0]
+    # output: l in [0, 100], ab in [-110, 110]
 
-    # l_rs = (lab[:, [0], :, :] - 50.0)/100.0
     l_rs = lab[:, [0], :, :]/100.0
     ab_rs = (lab[:, 1:, :, :] + 110.0)/220.0
     out = torch.cat((l_rs, ab_rs), dim=1)
-    # out ==> [0, 1.0]
-    # if out.max() > 1.01 or out.min() < -0.01:
-    #     print("input !!! rgb2lab ===========> !!!")
-    #     print("out.max()", out.max(), "l.max(): ", l_rs.max(), "ab.max(): ", ab_rs.max())
-    #     print("out.l.max()= ", out[:, [0], :, :].max())
-    #     print("out.ab.max()= ", out[:, 1:, :, :].max())
-    #     pdb.set_trace()
 
+    # return: tensor space: [0.0, 1.0]
     return out
 
 
 def lab2rgb(lab_rs):
     l = lab_rs[:, [0], :, :] * 100.0
     ab = (lab_rs[:, 1:, :, :]) * 220.0 - 110.0
-
     lab = torch.cat((l, ab), dim=1)
 
     # lab range: l->[0, 100], ab in [-110, 110] ==> rgb: [0, 1.0]
-
     out = xyz2rgb(lab2xyz(lab))
-    # if out.max() > 1.01 or out.min() < -0.01:
-    #     print("===========>")
-    #     print("out.max()", out.max(), "l.max(): ", l.max(), "ab.max(): ", ab.max())
-    #     print("out.l.max()= ", out[:, [0], :, :].max())
-    #     print("out.ab.max()= ", out[:, 1:, :, :].max())
 
     return out
 
+def multiple_crop(data, mult=16, HWmax=[4096, 4096]):
+    # crop image to a multiple
+    H, W = data.shape[1:]
+    Hnew = min(int(H/mult)*mult, HWmax[0])
+    Wnew = min(int(W/mult)*mult, HWmax[1])
+    h = (H-Hnew)//2
+    w = (W-Wnew)//2
+    return data[:, h:h+Hnew, w:w+Wnew]
 
 def get_transform(train=True):
     """Transform images."""
@@ -176,6 +174,7 @@ def get_reference(root):
     for filename in filelist:
         img = Image.open(os.path.join(root, filename)).convert("RGB")
         img = transforms(img)
+        img = multiple_crop(img)
         C, H, W = img.size()
         img = img.view(1, C, H, W)
         sequence.append(img)
@@ -217,6 +216,7 @@ class Video(data.Dataset):
             img = Image.open(filename).convert("RGB")
             if self.transforms is not None:
                 img = self.transforms(img)
+                img = multiple_crop(img)
                 C, H, W = img.size()
                 img = img.view(1, C, H, W)
             sequence.append(img)
