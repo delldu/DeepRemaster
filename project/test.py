@@ -9,38 +9,35 @@
 # ***
 # ************************************************************************************/
 #
-import os
 import argparse
+import os
+
 import torch
+
 from data import get_data
-from model import get_model, model_load, valid_epoch, model_setenv
+from model import enable_amp, get_model, model_device, model_load, valid_epoch
 
 if __name__ == "__main__":
     """Test model."""
 
-    model_setenv()
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint', type=str, default="models/VideoColor.pth", help="checkpoint file")
+    parser.add_argument('--checkpoint', type=str,
+                        default="models/VideoColor.pth", help="checkpoint file")
     parser.add_argument('--bs', type=int, default=2, help="batch size")
     args = parser.parse_args()
 
-    # CPU or GPU ?
-    device = torch.device(os.environ["DEVICE"])
-
     # get model
     model_r = get_model("modelR")
-    model_load(model_r, args.checkpoint)
+    model_load(model_r, "modelR", args.checkpoint)
+    device = model_device()
     model_r.to(device)
 
-    model_c = get_model("modelR")
-    model_load(model_c, args.checkpoint)
+    model_c = get_model("modelC")
+    model_load(model_c, "modelC", args.checkpoint)
     model_c.to(device)
 
-    if os.environ["ENABLE_APEX"] == "YES":
-        from apex import amp
-        model_r = amp.initialize(model_r, opt_level="O1")
-        model_c = amp.initialize(model_c, opt_level="O1")
+    enable_amp(model_r)
+    enable_amp(model_c)
 
     print("Start testing ...")
     test_dl = get_data(trainning=False, bs=args.bs)

@@ -147,6 +147,7 @@ def lab2rgb(lab_rs):
 
     return out
 
+
 def multiple_crop(data, mult=16, HWmax=[4096, 4096]):
     # crop image to a multiple
     H, W = data.shape[1:]
@@ -155,6 +156,7 @@ def multiple_crop(data, mult=16, HWmax=[4096, 4096]):
     h = (H-Hnew)//2
     w = (W-Wnew)//2
     return data[:, h:h+Hnew, w:w+Wnew]
+
 
 def get_transform(train=True):
     """Transform images."""
@@ -165,12 +167,13 @@ def get_transform(train=True):
     ts.append(T.ToTensor())
     return T.Compose(ts)
 
+
 def get_reference(root):
     """Get all frames of video."""
 
     filelist = list(sorted(os.listdir(root)))
     sequence = []
-    transforms = get_transform(train = False)
+    transforms = get_transform(train=False)
     for filename in filelist:
         img = Image.open(os.path.join(root, filename)).convert("RGB")
         img = transforms(img)
@@ -181,6 +184,7 @@ def get_reference(root):
 
     # General, return Tensor: T x C x H x W], T = self.seqlen
     return torch.cat(sequence, dim=0)
+
 
 class Video(data.Dataset):
     """Define Video Frames Class."""

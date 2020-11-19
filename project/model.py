@@ -10,22 +10,25 @@
 # ************************************************************************************/
 #
 
+import math
 import os
 import sys
-import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from apex import amp
 from tqdm import tqdm
 
 from data import VIDEO_SEQUENCE_LENGTH
+
 
 def PSNR(img1, img2):
     """PSNR."""
     difference = (1.*img1-img2)**2
     mse = torch.sqrt(torch.mean(difference)) + 0.000001
     return 20*torch.log10(1./mse)
+
 
 class TempConv(nn.Module):
     def __init__(self, in_planes, out_planes, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1)):
@@ -250,6 +253,7 @@ class VideoColorModel(nn.Module):
 
         return torch.sigmoid(out)
 
+
 def model_load(model, subname, path):
     """Load model."""
     if not os.path.exists(path):
@@ -271,35 +275,39 @@ def model_save(model, path):
     """Save model."""
     torch.save(model.state_dict(), path)
 
-def model_export():
-    """Export model to onnx."""
+
+def export_onnx_model():
+    """Export onnx model."""
 
     import onnx
     from onnx import optimizer
 
-    # xxxx--modify here
-    onnx_file = "model.onnx"
-    weight_file = "checkpoint/weight.pth"
+    onnx_file = "output/video_color.onnx"
+    weight_file = "output/VideoColor.pth"
 
     # 1. Load model
     print("Loading model ...")
-    model = VideoColorModel()
-    model_load(model, "modelC", weight_file)
+    model = get_model()
+    model_load(model, weight_file)
     model.eval()
 
     # 2. Model export
     print("Export model ...")
-    # xxxx--modify here
     dummy_input = torch.randn(1, 3, 512, 512)
-    input_names = [ "input" ]
-    output_names = [ "output" ]
+
+    input_names = ["input"]
+    output_names = ["output"]
+    # variable lenght axes
+    dynamic_axes = {'input': {0: 'batch_size', 1: 'channel', 2: "height", 3: 'width'},
+                    'output': {0: 'batch_size', 1: 'channel', 2: "height", 3: 'width'}}
     torch.onnx.export(model, dummy_input, onnx_file,
-                    input_names=input_names, 
-                    output_names=output_names,
-                    verbose=True,
-                    opset_version=11,
-                    keep_initializers_as_inputs=True,
-                    export_params=True)
+                      input_names=input_names,
+                      output_names=output_names,
+                      verbose=True,
+                      opset_version=11,
+                      keep_initializers_as_inputs=True,
+                      export_params=True,
+                      dynamic_axes=dynamic_axes)
 
     # 3. Optimize model
     print('Checking model ...')
@@ -307,16 +315,38 @@ def model_export():
     onnx.checker.check_model(model)
 
     print("Optimizing model ...")
-    passes = ["extract_constant_to_initializer", "eliminate_unused_initializer"]
+    passes = ["extract_constant_to_initializer",
+              "eliminate_unused_initializer"]
     optimized_model = optimizer.optimize(model, passes)
     onnx.save(optimized_model, onnx_file)
 
     # 4. Visual model
-    # python -c "import netron; netron.start('model.onnx')"
+    # python -c "import netron; netron.start('image_clean.onnx')"
+
+
+def export_torch_model():
+    """Export torch model."""
+
+    script_file = "output/video_color.pt"
+    weight_file = "output/VideoColor.pth"
+
+    # 1. Load model
+    print("Loading model ...")
+    model = get_model()
+    model_load(model, weight_file)
+    model.eval()
+
+    # 2. Model export
+    print("Export model ...")
+    dummy_input = torch.randn(1, 3, 512, 512)
+    traced_script_module = torch.jit.trace(model, dummy_input)
+    traced_script_module.save(script_file)
 
 
 def get_model(subname):
     """Create model."""
+
+    model_setenv()
     if subname == "modelR":
         model = VideoRestoreModel()
     else:
@@ -416,6 +446,11 @@ def valid_epoch(loader, model, device, tag=''):
             t.update(count)
 
 
+def model_device():
+    """First call model_setenv. """
+    return torch.device(os.environ["DEVICE"])
+
+
 def model_setenv():
     """Setup environ  ..."""
 
@@ -434,7 +469,6 @@ def model_setenv():
     if os.environ.get("DEVICE") != "YES" and os.environ.get("DEVICE") != "NO":
         os.environ["DEVICE"] = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-
     # Is there GPU ?
     if not torch.cuda.is_available():
         os.environ["ONLY_USE_CPU"] = "YES"
@@ -443,10 +477,7 @@ def model_setenv():
     if os.environ.get("ONLY_USE_CPU") == "YES":
         os.environ["ENABLE_APEX"] = "NO"
     else:
-        try:
-            from apex import amp
-        except:
-            os.environ["ENABLE_APEX"] = "NO"
+        os.environ["ENABLE_APEX"] = "YES"
 
     # Running on GPU if available
     if os.environ.get("ONLY_USE_CPU") == "YES":
@@ -464,31 +495,43 @@ def model_setenv():
     print("  ENABLE_APEX: ", os.environ["ENABLE_APEX"])
 
 
+def enable_amp(x):
+    """Init Automatic Mixed Precision(AMP)."""
+    if os.environ["ENABLE_APEX"] == "YES":
+        x = amp.initialize(x, opt_level="O1")
+
+
 def infer_perform():
     """Model infer performance ..."""
 
     model_setenv()
-    device = os.environ["DEVICE"]
 
     model = VideoColorModel()
     model.eval()
+    device = model_device()
     model = model.to(device)
+    enable_amp(model)
 
-    with tqdm(total=len(1000)) as t:
-        t.set_description(tag)
+    progress_bar = tqdm(total=100)
+    progress_bar.set_description("Test Inference Performance ...")
 
-        # xxxx--modify here
-        input = torch.randn(64, 3, 512, 512)
+    for i in range(100):
+        input = torch.randn(8, 3, 512, 512)
         input = input.to(device)
 
         with torch.no_grad():
             output = model(input)
 
-        t.update(1)
+        progress_bar.update(1)
 
 
 if __name__ == '__main__':
     """Test model ..."""
 
-    # model_export()
+    model = get_model()
+    print(model)
+
+    export_torch_model()
+    export_onnx_model()
+
     infer_perform()

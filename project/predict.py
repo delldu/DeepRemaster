@@ -9,36 +9,36 @@
 # ***
 # ************************************************************************************/
 #
-import os
-import glob
 import argparse
+import glob
+import os
+import pdb
+
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
-from model import get_model, model_load, model_setenv
-from data import Video, get_reference, rgb2lab, lab2rgb, VIDEO_SEQUENCE_LENGTH
 from tqdm import tqdm
 
-import pdb
+from data import VIDEO_SEQUENCE_LENGTH, Video, get_reference, lab2rgb, rgb2lab
+from model import enable_amp, get_model, model_device, model_load
 
 if __name__ == "__main__":
     """Predict."""
 
-    model_setenv()
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint', type=str, default="models/VideoColor.pth", help="checkpint file")
-    parser.add_argument('--input', type=str, default="dataset/predict/input", help="input image folder")
-    parser.add_argument('--output', type=str, default="dataset/predict/output", help="output image folder")
+    parser.add_argument('--checkpoint', type=str,
+                        default="models/VideoColor.pth", help="checkpint file")
+    parser.add_argument(
+        '--input', type=str, default="dataset/predict/input", help="input image folder")
+    parser.add_argument(
+        '--output', type=str, default="dataset/predict/output", help="output image folder")
 
     args = parser.parse_args()
-
-    # CPU or GPU ?
-    device = torch.device(os.environ["DEVICE"])
 
     # Restoration
     model_r = get_model("modelR")
     model_load(model_r, "modelR", args.checkpoint)
+    device = model_device()
     model_r.to(device)
     model_r.eval()
 
@@ -47,10 +47,8 @@ if __name__ == "__main__":
     model_c.to(device)
     model_c.eval()
 
-    # if os.environ["ENABLE_APEX"] == "YES":
-    #     from apex import amp
-    #     model_r = amp.initialize(model_r, opt_level="O1")
-    #     model_c = amp.initialize(model_c, opt_level="O1")
+    enable_amp(model_c)
+    enable_amp(model_r)
 
     totensor = transforms.ToTensor()
     toimage = transforms.ToPILImage()
@@ -64,7 +62,8 @@ if __name__ == "__main__":
     progress_bar = tqdm(total=len(video))
 
     # Get Reference Images: [B, T, C, H, W]
-    refimgs = get_reference(os.path.dirname(args.input) + "/reference").unsqueeze(0)
+    refimgs = get_reference(os.path.dirname(
+        args.input) + "/reference").unsqueeze(0)
     reference_tensor = refimgs.to(device)
     # print("Reference Images Tensor Size: ", reference_tensor.size())
 
@@ -94,7 +93,8 @@ if __name__ == "__main__":
 
         output_tensor_l.squeeze_(0)
         output_tensor_ab.squeeze_(0)
-        output_tensor_lab = torch.cat((output_tensor_l, output_tensor_ab), dim=1)
+        output_tensor_lab = torch.cat(
+            (output_tensor_l, output_tensor_ab), dim=1)
         output_tensor = lab2rgb(output_tensor_lab)
 
         del output_tensor_l, output_tensor_ab, output_tensor_lab
@@ -104,4 +104,5 @@ if __name__ == "__main__":
         torch.cuda.empty_cache()
 
         for j in range(seqlen):
-            toimage(output_tensor[j]).save("{}/{:06d}.png".format(args.output, index + 1 + j))
+            toimage(output_tensor[j]).save(
+                "{}/{:06d}.png".format(args.output, index + 1 + j))
